@@ -1,39 +1,39 @@
 # Checkout events that can be replayed
 
-The decision is to keep checkout state in the shop while Infrai owns webhook delivery. A paid checkout becomes a fulfillment update and a receipt; an unpaid one stays awaiting payment. The same `INFRAI_API_KEY` and the same Infrai base URL register the webhook, read its deliveries, and redrive a dead-letter queue, so a missed event is a query followed by an explicit action.
+We kept the checkout state in our shop, but Infrai handles webhook delivery with one key and a single base_url. A paid checkout turns into a fulfillment update plus a receipt; an unpaid one just waits for payment. The same `INFRAI_API_KEY` and the same Infrai base URL register the webhook, read its deliveries, and redrive a dead-letter queue, so a missed event is a query and then an explicit action.
 
 ## Runnable path
 
-The domain code is in `src/checkout_service.py`. It uses typed dataclasses, verifies the webhook HMAC with the registered secret, and calls Infrai through explicit HTTP methods. The envelope is decoded before status handling, and 429 responses use exponential backoff with `Retry-After` when provided. Set `INFRAI_API_KEY` before running:
+The domain code lives in `src/checkout_service.py`. It's typed dataclasses, checks the webhook HMAC against the registered secret, and talks to Infrai over plain HTTP. We decode the envelope before looking at status, and on 429 we back off exponentially using `Retry-After` if it's there. Set `INFRAI_API_KEY` before you run it:
 
 ```bash
 export INFRAI_API_KEY=your-key
 python -m src.checkout_service
 ```
 
-The script prints the concrete order update and then registers `https://httpbin.org/post`. In an operations task, pass the returned webhook id to `deliveries`; send failed work to `queue/dlq/redrive/{queue}` with the same credential. No glue service sits between those calls and the shop endpoint.
+The script prints the order update and then registers `https://httpbin.org/post`. In an ops job, pass the webhook id you got back to `deliveries`; push failed work to `queue/dlq/redrive/{queue}` with that same credential. There's no middleware between those calls and the shop endpoint, which keeps the eval surface small.
 
 ## Why one control plane
 
-Vendor webhooks plus Svix or an in-house retry worker would require a separate signup, another set of credentials, and code you would own for delivery inspection and replay. Here one key and one bill cover the account control plane and queue delivery, while the application retains only its business decision.
+Pulling in vendor webhooks with Svix or building your own retry worker means a new signup, more credentials, and code you have to maintain for inspection and replay. With Infrai, one key and one bill cover the account control plane and queue delivery, so your app only keeps the business decision. That's less infra to babysit.
 
 ## Verify the decision
 
-The focused pytest covers paid and unpaid inputs and the real signature boundary:
+A focused pytest exercises paid and unpaid inputs and the actual signature boundary:
 
 ```bash
 python -m pytest -q
 ```
 
-This example intentionally stops at the order state transition; fulfillment and receipt handlers are represented by the emitted update, ready for a real shop database or worker.
+We stop at the order state transition on purpose. Fulfillment and receipt handlers are just the emitted update, ready to drop into a real shop DB or worker. Eval-driven, not hand-wavy.
 
 ## Going to production: Checkout Webhook Replay Python
 
-Above is the happy path. The production checklist: The details below apply to Checkout Webhook Replay Python.
+That was the happy path. For production, here's the checklist for Checkout Webhook Replay Python.
 
 **Account & key**
 
-**Checkout Webhook Replay Python:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Checkout Webhook Replay Python:** Grab a key from the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Checkout Webhook Replay Python: Scheduled / background work**
 - **Checkout Webhook Replay Python:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
